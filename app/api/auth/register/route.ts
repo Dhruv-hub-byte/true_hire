@@ -10,8 +10,9 @@ import {
   generateRefreshToken,
 } from "@/lib/auth"
 
-import { user_role } from "@prisma/client"
 import { sendVerificationEmail } from "@/lib/email"
+
+
 /* =====================================================
    ENV GUARD
 ===================================================== */
@@ -147,7 +148,7 @@ export async function POST(req: NextRequest) {
         email,
         password: hashed,
         name,
-        role: role as user_role,
+        role: role as "ADMIN" | "INTERVIEWER" | "CANDIDATE",
         emailVerified: false, // must verify via email link
         isActive: true,
       },
