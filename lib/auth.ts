@@ -29,7 +29,7 @@ export interface JWTPayload {
 ===================================================== */
 
 export function generateToken(payload: JWTPayload): string {
-  return jwt.sign(payload, JWT_SECRET!, {
+  return jwt.sign(payload, getJwtSecret(), {
     expiresIn: JWT_EXPIRY,
     algorithm: "HS256",
   })
@@ -37,7 +37,7 @@ export function generateToken(payload: JWTPayload): string {
 
 export function verifyToken(token: string): JWTPayload | null {
   try {
-    const decoded = jwt.verify(token, JWT_SECRET!, {
+    const decoded = jwt.verify(token, getJwtSecret(), {
       algorithms: ["HS256"],
     }) as JwtPayload & JWTPayload
 
@@ -60,7 +60,7 @@ export function verifyToken(token: string): JWTPayload | null {
 ===================================================== */
 
 export function generateRefreshToken(userId: string): string {
-  return jwt.sign({ userId }, JWT_REFRESH_SECRET!, {
+  return jwt.sign({ userId }, getJwtRefreshSecret(), {
     expiresIn: JWT_REFRESH_EXPIRY,
     algorithm: "HS256",
   })
@@ -68,7 +68,7 @@ export function generateRefreshToken(userId: string): string {
 
 export function verifyRefreshToken(token: string): { userId: string } | null {
   try {
-    const decoded = jwt.verify(token, JWT_REFRESH_SECRET!, {
+    const decoded = jwt.verify(token, getJwtRefreshSecret(), {
       algorithms: ["HS256"],
     }) as JwtPayload & { userId: string }
 
