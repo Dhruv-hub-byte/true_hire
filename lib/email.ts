@@ -2,8 +2,6 @@ import { Resend } from "resend"
 import { prisma } from "@/lib/prisma"
 import crypto from "crypto"
 
-if (!process.env.RESEND_API_KEY)      throw new Error("RESEND_API_KEY is not set")
-if (!process.env.NEXT_PUBLIC_APP_URL) throw new Error("NEXT_PUBLIC_APP_URL is not set")
 
 const resend  = new Resend(process.env.RESEND_API_KEY)
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL

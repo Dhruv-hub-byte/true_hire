@@ -5,9 +5,6 @@ import { prisma } from "@/lib/prisma"
    ENV GUARD
 ===================================================== */
 
-if (!process.env.GEMINI_API_KEY) {
-  throw new Error("GEMINI_API_KEY is not set")
-}
 
 /* =====================================================
    GEMINI CLIENT

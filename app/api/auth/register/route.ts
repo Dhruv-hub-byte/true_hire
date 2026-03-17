@@ -12,13 +12,10 @@ import {
 
 import { sendVerificationEmail } from "@/lib/email"
 
-
 /* =====================================================
    ENV GUARD
 ===================================================== */
 
-if (!process.env.JWT_SECRET) throw new Error("JWT_SECRET is not set")
-if (!process.env.JWT_REFRESH_SECRET) throw new Error("JWT_REFRESH_SECRET is not set")
 
 /* =====================================================
    RATE LIMITING (in-memory — swap for Upstash in prod)

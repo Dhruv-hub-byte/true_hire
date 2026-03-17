@@ -6,7 +6,6 @@ import { withAuth, AuthenticatedRequest } from "@/lib/middleware"
    ENV GUARD
 ===================================================== */
 
-if (!process.env.DAILY_API_KEY) throw new Error("DAILY_API_KEY is not set")
 
 /* =====================================================
    POST /api/interviews/[id]/video-room
