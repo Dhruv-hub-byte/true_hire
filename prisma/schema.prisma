@@ -3,214 +3,336 @@ generator client {
 }
 
 datasource db {
-  provider = "mysql"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-model chatmessage {
-  id          String                 @id @default(cuid())
-  message     String
-  senderRole  chatmessage_senderRole
-  createdAt   DateTime               @default(now())
-  interviewId String
-  interview   interview              @relation(fields: [interviewId], references: [id], onDelete: Cascade, map: "ChatMessage_interviewId_fkey")
+// ======================================================
+//
+//  TRUEHIRE DATABASE SCHEMA
+//
+//  Models:
+//  1. user              — everyone who logs in
+//  2. session           — active login sessions
+//  3. company           — companies that conduct interviews
+//  4. interview         — scheduled interview session
+//  5. question          — company question bank
+//  6. interviewquestion — questions in an interview + answers
+//  7. report            — AI report after interview completes
+//  8. violation         — anti-cheat violations
+//  9. chatmessage       — live chat during interview
+//
+// ======================================================
 
-  @@index([interviewId], map: "ChatMessage_interviewId_idx")
+
+// ======================================================
+//  1. USER
+//  Everyone who logs into TrueHire.
+//  Role decides what they can see and do.
+// ======================================================
+
+model user {
+  id            String      @id @default(cuid())
+  email         String      @unique(map: "User_email_key")
+  name          String
+  password      String                              // bcrypt hashed — never plain text
+  role          user_role   @default(CANDIDATE)     // ADMIN | INTERVIEWER | CANDIDATE
+  status        user_status @default(ACTIVE)        // ACTIVE | INACTIVE | SUSPENDED | PENDING_VERIFICATION
+  phone         String?
+  profileImage  String?                             // URL to profile picture
+  isActive      Boolean     @default(true)          // quick enable/disable toggle
+  emailVerified Boolean     @default(false)         // true after clicking email link
+  lastLoginAt   DateTime?                           // updated on every successful login
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  deletedAt     DateTime?                           // soft delete — null means active
+
+  // Interviewers/admins belong to a company
+  // Candidates usually have no companyId
+  companyId     String?
+  company       company?    @relation(fields: [companyId], references: [id], map: "User_companyId_fkey")
+
+  session       session[]
+  violation     violation[]
+  interview_interview_candidateIdTouser   interview[] @relation("interview_candidateIdTouser")
+  interview_interview_interviewerIdTouser interview[] @relation("interview_interviewerIdTouser")
+
+  @@index([email],     map: "User_email_idx")
+  @@index([role],      map: "User_role_idx")
+  @@index([status],    map: "User_status_idx")
+  @@index([companyId], map: "User_companyId_idx")
+  @@index([deletedAt], map: "User_deletedAt_idx")
 }
 
+
+// ======================================================
+//  2. SESSION
+//  Stores active refresh token sessions.
+//  One user = multiple sessions (multiple devices).
+//  Token stored as SHA-256 hash — never raw JWT.
+// ======================================================
+
+model session {
+  id        String   @id @default(cuid())
+  token     String   @unique @db.VarChar(255)  // SHA-256 hash of refresh token
+  expiresAt DateTime                            // 30 days from creation
+  createdAt DateTime @default(now())
+  ipAddress String?                             // IP when session was created
+  userAgent String?  @db.VarChar(500)           // browser/device info
+
+  userId    String
+  user      user     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt], map: "Session_expiresAt_idx")
+}
+
+
+// ======================================================
+//  3. COMPANY
+//  A company that uses TrueHire to run interviews.
+//  Interviewers and admins belong to a company.
+//  Questions and interviews are linked to a company.
+// ======================================================
+
 model company {
-  id          String      @id @default(cuid())
+  id          String    @id @default(cuid())
   name        String
   description String?
-  logo        String?
+  logo        String?                   // URL to company logo
   website     String?
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
-  deletedAt   DateTime?   // soft delete
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?                 // soft delete — null means active
+
+  user        user[]
   interview   interview[]
   question    question[]
-  user        user[]
 
-  @@index([name], map: "Company_name_idx")
+  @@index([name],      map: "Company_name_idx")
   @@index([deletedAt], map: "Company_deletedAt_idx")
 }
 
+
+// ======================================================
+//  4. INTERVIEW
+//  A scheduled interview session.
+//  One candidate + one interviewer + one company.
+//
+//  Status flow:
+//  SCHEDULED → IN_PROGRESS → COMPLETED
+//                          → CANCELLED
+// ======================================================
+
 model interview {
-  id                                 String              @id @default(cuid())
-  title                              String
-  description                        String?
-  startTime                          DateTime
-  endTime                            DateTime
-  duration                           Int
-  status                             interview_status    @default(SCHEDULED)
-  videoRecording                     String?
-  audioRecording                     String?
-  screenRecording                    String?
-  transcript                         String?
-  sentimentScore                     Float?
-  confidenceScore                    Float?
-  communicationScore                 Float?
-  cheatingProbability                Float?              @default(0)
-  createdAt                          DateTime            @default(now())
-  updatedAt                          DateTime            @updatedAt
-  companyId                          String
-  candidateId                        String
-  interviewerId                      String?
-  chatmessage                        chatmessage[]
-  user_interview_candidateIdTouser   user                @relation("interview_candidateIdTouser", fields: [candidateId], references: [id], onDelete: Cascade, map: "Interview_candidateId_fkey")
-  company                            company             @relation(fields: [companyId], references: [id], onDelete: Cascade, map: "Interview_companyId_fkey")
+  id          String           @id @default(cuid())
+  title       String                                 // e.g. "Frontend Engineer Interview"
+  description String?
+  startTime   DateTime                               // scheduled start time
+  endTime     DateTime                               // scheduled end (updated on submit)
+  duration    Int                                    // duration in minutes
+  status      interview_status @default(SCHEDULED)
+
+  // Recordings — URLs saved after upload to cloud storage
+  videoRecording  String?
+  audioRecording  String?
+  screenRecording String?
+  transcript      String?
+
+  // AI-generated scores (set after interview completes)
+  sentimentScore      Float?
+  confidenceScore     Float?
+  communicationScore  Float?
+  cheatingProbability Float? @default(0)  // 0.0 = clean, 0.95 = very high risk
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  companyId     String
+  candidateId   String
+  interviewerId String?   // can be assigned after creation
+
+  company                            company             @relation(fields: [companyId],    references: [id], onDelete: Cascade, map: "Interview_companyId_fkey")
+  user_interview_candidateIdTouser   user                @relation("interview_candidateIdTouser",   fields: [candidateId],   references: [id], onDelete: Cascade, map: "Interview_candidateId_fkey")
   user_interview_interviewerIdTouser user?               @relation("interview_interviewerIdTouser", fields: [interviewerId], references: [id], map: "Interview_interviewerId_fkey")
   interviewquestion                  interviewquestion[]
+  chatmessage                        chatmessage[]
   report                             report?
   violation                          violation[]
 
-  @@index([candidateId], map: "Interview_candidateId_idx")
-  @@index([companyId], map: "Interview_companyId_idx")
+  @@index([candidateId],   map: "Interview_candidateId_idx")
+  @@index([companyId],     map: "Interview_companyId_idx")
   @@index([interviewerId], map: "Interview_interviewerId_idx")
-  @@index([status], map: "Interview_status_idx")
+  @@index([status],        map: "Interview_status_idx")
 }
 
-model interviewquestion {
-  id          String    @id @default(cuid())
-  order       Int
-  answer      String?
-  timeSpent   Int?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  interviewId String
-  questionId  String
-  interview   interview @relation(fields: [interviewId], references: [id], onDelete: Cascade, map: "InterviewQuestion_interviewId_fkey")
-  question    question  @relation(fields: [questionId], references: [id], onDelete: Cascade, map: "InterviewQuestion_questionId_fkey")
 
-  @@unique([interviewId, questionId], map: "InterviewQuestion_interviewId_questionId_key")
-  @@index([interviewId], map: "InterviewQuestion_interviewId_idx")
-  @@index([questionId], map: "InterviewQuestion_questionId_fkey")
-}
+// ======================================================
+//  5. QUESTION
+//  A question in a company's question bank.
+//  type = "GENERAL"  → text answer
+//  type = "CODE"     → coding answer (shows codeTemplate)
+// ======================================================
 
 model question {
-  id                String              @id @default(cuid())
-  text              String
-  type              String              @default("GENERAL")
-  codeTemplate      String?
-  createdAt         DateTime            @default(now())
-  updatedAt         DateTime            @updatedAt
+  id           String @id @default(cuid())
+  text         String                       // question shown to candidate
+  type         String @default("GENERAL")   // "GENERAL" | "CODE"
+  codeTemplate String?                      // starter code for coding questions
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   companyId         String
-  interviewquestion interviewquestion[]
   company           company             @relation(fields: [companyId], references: [id], onDelete: Cascade, map: "Question_companyId_fkey")
+  interviewquestion interviewquestion[]
 
   @@index([companyId], map: "Question_companyId_idx")
 }
 
+
+// ======================================================
+//  6. INTERVIEWQUESTION
+//  Join table: which questions are in which interview.
+//  Also stores the candidate's answer and time spent.
+//  order = display sequence (1, 2, 3...)
+// ======================================================
+
+model interviewquestion {
+  id        String  @id @default(cuid())
+  order     Int                           // question sequence number
+  answer    String?                       // saved when candidate submits
+  timeSpent Int?                          // seconds spent on this question
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  interviewId String
+  questionId  String
+
+  interview interview @relation(fields: [interviewId], references: [id], onDelete: Cascade, map: "InterviewQuestion_interviewId_fkey")
+  question  question  @relation(fields: [questionId],  references: [id], onDelete: Cascade, map: "InterviewQuestion_questionId_fkey")
+
+  // Same question cannot appear twice in one interview
+  @@unique([interviewId, questionId], map: "InterviewQuestion_interviewId_questionId_key")
+  @@index([interviewId], map: "InterviewQuestion_interviewId_idx")
+  @@index([questionId],  map: "InterviewQuestion_questionId_idx")
+}
+
+
+// ======================================================
+//  7. REPORT
+//  AI-generated report after interview completes.
+//  One report per interview (@unique on interviewId).
+//  strengths / weaknesses / recommendations = JSON string arrays
+//  overallScore = 0 to 100
+// ======================================================
+
 model report {
-  id              String    @id @default(cuid())
-  summary         String
-  strengths       Json
-  weaknesses      Json
-  recommendations Json
-  overallScore    Float
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  interviewId     String    @unique(map: "Report_interviewId_key")
-  interview       interview @relation(fields: [interviewId], references: [id], onDelete: Cascade, map: "Report_interviewId_fkey")
+  id              String @id @default(cuid())
+  summary         String                   // overall text summary paragraph
+  strengths       Json                     // ["good communication", "strong logic"]
+  weaknesses      Json                     // ["struggled with edge cases"]
+  recommendations Json                     // ["practice system design"]
+  overallScore    Float                    // 0-100 e.g. 78.5
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  interviewId String    @unique(map: "Report_interviewId_key")
+  interview   interview @relation(fields: [interviewId], references: [id], onDelete: Cascade, map: "Report_interviewId_fkey")
 
   @@index([interviewId], map: "Report_interviewId_idx")
 }
 
-model session {
-  id         String   @id @default(cuid())
-  token      String   @unique @db.VarChar(255)
-  expiresAt  DateTime
-  createdAt  DateTime @default(now())
-  ipAddress  String?  // for session hijacking detection
-  userAgent  String?  @db.VarChar(500) // UA strings can be long
-  userId     String
-  user       user     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([userId])
-  @@index([expiresAt], map: "Session_expiresAt_idx") // speeds up expired session cleanup
-}
-
-model user {
-  id                                      String      @id @default(cuid())
-  email                                   String      @unique(map: "User_email_key")
-  name                                    String
-  password                                String
-  role                                    user_role   @default(CANDIDATE)
-  status                                  user_status @default(ACTIVE)
-  phone                                   String?
-  profileImage                            String?
-  isActive                                Boolean     @default(true)
-  emailVerified                           Boolean     @default(false)
-  lastLoginAt                             DateTime?   // updated on every successful login
-  createdAt                               DateTime    @default(now())
-  updatedAt                               DateTime    @updatedAt
-  deletedAt                               DateTime?   // soft delete
-  companyId                               String?
-  interview_interview_candidateIdTouser   interview[] @relation("interview_candidateIdTouser")
-  interview_interview_interviewerIdTouser interview[] @relation("interview_interviewerIdTouser")
-  session                                 session[]
-  company                                 company?    @relation(fields: [companyId], references: [id], map: "User_companyId_fkey")
-  violation                               violation[]
-
-  @@index([companyId], map: "User_companyId_idx")
-  @@index([email], map: "User_email_idx")
-  @@index([role], map: "User_role_idx")
-  @@index([status], map: "User_status_idx")
-  @@index([deletedAt], map: "User_deletedAt_idx")
-}
+// ======================================================
+//  8. VIOLATION
+//  Anti-cheat violation recorded during an interview.
+//  Created automatically by AntiCheatManager (anti-cheat.ts).
+//  Each violation increases cheatingProbability on interview.
+//  severity 1 = minor, 5 = critical
+// ======================================================
 
 model violation {
   id          String         @id @default(cuid())
-  type        violation_type
-  description String
-  timestamp   DateTime       @default(now())
-  severity    Int            @default(1)
+  type        violation_type                       // what kind of violation
+  description String                               // human readable e.g. "Candidate switched tab"
+  severity    Int            @default(1)           // 1-5
+  timestamp   DateTime       @default(now())       // exact time of violation
   createdAt   DateTime       @default(now())
+
   interviewId String
   userId      String
-  interview   interview      @relation(fields: [interviewId], references: [id], onDelete: Cascade, map: "Violation_interviewId_fkey")
-  user        user           @relation(fields: [userId], references: [id], onDelete: Cascade, map: "Violation_userId_fkey")
+
+  interview interview @relation(fields: [interviewId], references: [id], onDelete: Cascade, map: "Violation_interviewId_fkey")
+  user      user      @relation(fields: [userId],      references: [id], onDelete: Cascade, map: "Violation_userId_fkey")
 
   @@index([interviewId], map: "Violation_interviewId_idx")
-  @@index([userId], map: "Violation_userId_idx")
+  @@index([userId],      map: "Violation_userId_idx")
 }
 
+
 // ======================================================
-// ENUMS
+//  9. CHATMESSAGE
+//  Live chat messages sent during an interview.
+//  senderRole tells you who sent the message.
 // ======================================================
 
+model chatmessage {
+  id         String                 @id @default(cuid())
+  message    String
+  senderRole chatmessage_senderRole
+  createdAt  DateTime               @default(now())
+
+  interviewId String
+  interview   interview @relation(fields: [interviewId], references: [id], onDelete: Cascade, map: "ChatMessage_interviewId_fkey")
+
+  @@index([interviewId], map: "ChatMessage_interviewId_idx")
+}
+
+
+// ======================================================
+//  ENUMS
+// ======================================================
+
+// Who the user is — controls what they can access
+enum user_role {
+  ADMIN        // full access: manages everything
+  INTERVIEWER  // can create interviews and write reports
+  CANDIDATE    // can only see and take their own interviews
+}
+
+// Current state of a user account
+enum user_status {
+  ACTIVE                // can log in normally
+  INACTIVE              // disabled by admin
+  SUSPENDED             // flagged — cannot log in
+  PENDING_VERIFICATION  // registered but email not verified
+}
+
+// Lifecycle of an interview
+enum interview_status {
+  SCHEDULED    // created, waiting to start
+  IN_PROGRESS  // candidate joined and is answering
+  COMPLETED    // candidate submitted — answers saved
+  CANCELLED    // cancelled before it happened
+}
+
+// Types of anti-cheat violations (must match anti-cheat.ts)
 enum violation_type {
-  TAB_SWITCH
-  FOCUS_LOSS
-  COPY_PASTE_ATTEMPT
-  RIGHT_CLICK_ATTEMPT
-  TEXT_SELECTION_ATTEMPT
-  MULTIPLE_MONITORS
-  SUSPICIOUS_BEHAVIOR
+  TAB_SWITCH              // switched to another tab
+  FOCUS_LOSS              // window lost focus or exited fullscreen
+  COPY_PASTE_ATTEMPT      // tried to copy, cut or paste
+  RIGHT_CLICK_ATTEMPT     // tried to right-click
+  TEXT_SELECTION_ATTEMPT  // tried to select text outside answer fields
+  MULTIPLE_MONITORS       // second monitor detected
+  SUSPICIOUS_BEHAVIOR     // dev tools, print screen, view source etc.
 }
 
+// Who sent a chat message
 enum chatmessage_senderRole {
   ADMIN
   INTERVIEWER
   CANDIDATE
-}
-
-enum user_role {
-  ADMIN
-  INTERVIEWER
-  CANDIDATE
-}
-
-enum user_status {
-  ACTIVE
-  INACTIVE
-  SUSPENDED
-  PENDING_VERIFICATION
-}
-
-enum interview_status {
-  SCHEDULED
-  IN_PROGRESS
-  COMPLETED
-  CANCELLED
 }
