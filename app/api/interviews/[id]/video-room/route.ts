@@ -81,17 +81,16 @@ async function postHandler(
         "Authorization": `Bearer ${process.env.DAILY_API_KEY}`,
       },
       body: JSON.stringify({
-        name:       roomName,
-        privacy:    "private",
+        name: roomName,
+        privacy: "public",                  // ✅ free tier works with public
         properties: {
-          exp:                     expiryTs,
-          //enable_recording:        "cloud",
-          max_participants:        5,
-          enable_prejoin_ui:       false,
-          enable_knocking:         false,
-          enable_screenshare:      true,
-          enable_chat:             false, // we have our own chat
-          lang:                    "en",
+          exp: expiryTs,
+          // ✅ removed enable_recording
+          max_participants: 2,          // ✅ candidate + interviewer only
+          enable_prejoin_ui: true,
+          enable_screenshare: true,
+          enable_chat: false,
+          lang: "en",
         },
       }),
     })
